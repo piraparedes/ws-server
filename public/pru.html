@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Test WebSocket get_umbrales</title>
+</head>
+<body style="background: #111; color: white; font-family: monospace; padding: 20px;">
+  <h2>🧪 Test WebSocket Node-RED</h2>
+  <div id="estado">Conectando...</div>
+  <pre id="log"></pre>
+
+  <script>
+    const estado = document.getElementById("estado");
+    const log = document.getElementById("log");
+    let umbralesRecibidos = false;
+
+    const socket = new WebSocket("wss://ws-server-zwos.onrender.com");
+
+    socket.onopen = () => {
+      estado.textContent = "🟢 Conectado a WebSocket";
+      log.textContent += "✅ Conectado. Esperando 500ms antes de enviar...\n";
+
+      setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          const msg = { tipo: "get_umbrales" };
+          socket.send(JSON.stringify(msg));
+          log.textContent += "📤 Enviado: " + JSON.stringify(msg) + "\n";
+        }
+      }, 5000); // ← ⏱️ este delay permite que Node-RED esté listo
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.umbrales) {
+          umbralesRecibidos = true;
+          log.textContent += "📥 Umbrales recibidos:\n" + JSON.stringify(data.umbrales, null, 2) + "\n";
+        } else {
+          log.textContent += "📨 Otro mensaje:\n" + event.data + "\n";
+        }
+      } catch {
+        log.textContent += "⚠️ No se pudo interpretar:\n" + event.data + "\n";
+      }
+    };
+
+    socket.onerror = () => {
+      estado.textContent = "🔴 Error WebSocket";
+      log.textContent += "❌ Error en WebSocket\n";
+    };
+
+    socket.onclose = () => {
+      estado.textContent = "🔴 WebSocket cerrado";
+      log.textContent += "🔌 Conexión cerrada\n";
+    };
+  </script>
+</body>
+</html>
