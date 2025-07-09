@@ -1,76 +1,215 @@
+
 const express = require("express");
 const http = require("http");
-const WebSocket = require("ws");
+const { Server: WebSocketServer } = require("ws");
 const fs = require("fs");
 const path = require("path");
+const cron = require("node-cron");
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server }); // WebSocket sin path personalizado
 
-const PORT = process.env.PORT || 3000;
+// Rutas de archivos
+const movementsPath = path.join(__dirname, "data", "movements.json");
+const contadoresPath = path.join(__dirname, "data", "contadores.json");
+const umbralesPath = path.join(__dirname, "data", "umbrales.json");
 
-// ✅ Ruta raíz para que Render responda correctamente
+// Inicializar archivos si no existen
+if (!fs.existsSync(movementsPath)) fs.writeFileSync(movementsPath, "[]");
+if (!fs.existsSync(contadoresPath)) fs.writeFileSync(contadoresPath, "{}");
+if (!fs.existsSync(umbralesPath)) {
+  const umbralesIniciales = {
+    ancho: 1.5,
+    alto: 2.0,
+    cx: 0,
+    cy: 0,
+    zonaA: { cx: 2, cy: 2, ancho: 1, alto: 1 },
+    zonaB: { cx: -2, cy: -2, ancho: 1, alto: 1 },
+    modo: "completo"
+  };
+  fs.writeFileSync(umbralesPath, JSON.stringify(umbralesIniciales, null, 2));
+}
+
+let logCache = [];
+try {
+  const raw = fs.readFileSync(movementsPath);
+  logCache = JSON.parse(raw);
+} catch (e) {
+  logCache = [];
+}
+
+// Servir archivos estáticos
+app.use(express.static(path.join(__dirname, "public")));
+
+// Ruta raíz para verificación
 app.get("/", (req, res) => {
-  res.send("🟢 Servidor WebSocket activo");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send("<h1>Servidor WebSocket activo ✅</h1>");
 });
 
-// Crear carpeta de datos si no existe
-if (!fs.existsSync("data")) fs.mkdirSync("data");
-
-// Asegurar que los archivos existen
-["movements.json", "contadores.json", "umbrales.json"].forEach(file => {
-  const filePath = path.join("data", file);
-  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, file === "umbrales.json" ? "{}" : "[]");
+// API REST
+app.get("/movements", (req, res) => {
+  try {
+    const data = fs.readFileSync(movementsPath);
+    res.json(JSON.parse(data));
+  } catch (e) {
+    res.status(500).json({ error: "Error al leer movimientos" });
+  }
 });
 
-// Broadcast a todos los clientes
-function broadcast(data) {
-  const msg = JSON.stringify(data);
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg);
-    }
+app.get("/contadores", (req, res) => {
+  try {
+    const data = fs.readFileSync(contadoresPath);
+    res.json(JSON.parse(data));
+  } catch (e) {
+    res.status(500).json({ error: "Error al leer contadores" });
+  }
+});
+
+app.post("/reset-contadores", express.json(), (req, res) => {
+  fs.writeFileSync(contadoresPath, "{}");
+  res.json({ status: "Contadores reiniciados" });
+});
+
+let horaReset = "6";
+
+app.post("/hora-reset", express.json(), (req, res) => {
+  if (req.body && req.body.hora) {
+    horaReset = req.body.hora;
+    programarResetContadores();
+    res.json({ status: "Hora de reset actualizada", hora: horaReset });
+  } else {
+    res.status(400).json({ error: "Falta campo 'hora'" });
+  }
+});
+
+// Reseteos programados
+cron.schedule("0 6 * * *", () => {
+  fs.writeFileSync(movementsPath, "[]");
+});
+
+let tareaReset = null;
+function programarResetContadores() {
+  if (tareaReset) tareaReset.stop();
+  const hora = parseInt(horaReset);
+  if (!isNaN(hora) && hora >= 0 && hora <= 23) {
+    tareaReset = cron.schedule(`0 ${hora} * * *`, () => {
+      fs.writeFileSync(contadoresPath, "{}");
+      console.log(`⏰ Contadores reiniciados automáticamente a las ${hora}:00`);
+    });
+  }
+}
+programarResetContadores();
+
+// Guardado periódico
+setInterval(() => {
+  try {
+    fs.writeFileSync(movementsPath, JSON.stringify(logCache));
+    console.log("💾 Movimientos guardados a disco.");
+  } catch (e) {
+    console.error("❌ Error guardando movimientos:", e);
+  }
+}, 5000);
+
+// WebSocket
+let clients = [];
+
+function broadcastExcept(sender, texto) {
+  clients = clients.filter(c => c.readyState === 1);
+  clients.forEach(c => {
+    if (c !== sender) c.send(texto);
   });
 }
 
-// Conexión WebSocket
-wss.on("connection", ws => {
-  console.log("Cliente conectado");
+function broadcastAll(texto) {
+  clients = clients.filter(c => c.readyState === 1);
+  clients.forEach(c => c.send(texto));
+}
 
-  ws.on("message", msg => {
+setInterval(() => {
+  clients = clients.filter(c => c.readyState === 1);
+  clients.forEach(c => {
     try {
-      const data = JSON.parse(msg);
+      c.ping();
+    } catch (e) {
+      console.error("Error en ping:", e);
+    }
+  });
+}, 30000);
 
-      if (data.tipo === "detecciones") {
-        const movements = JSON.parse(fs.readFileSync("data/movements.json"));
-        movements.push(...data.datos);
-        fs.writeFileSync("data/movements.json", JSON.stringify(movements, null, 2));
-        broadcast({ tipo: "nueva_deteccion", datos: data.datos });
+wss.on("connection", (ws) => {
+  clients.push(ws);
+  console.log("📶 Nuevo cliente conectado. Total:", clients.length);
+
+  ws.on("message", (message) => {
+    const ip = ws._socket.remoteAddress;
+    const texto = typeof message === "string" ? message : message.toString("utf8");
+
+    try {
+      const json = JSON.parse(texto);
+
+      if (typeof json !== "object" || json === null) throw new Error("Mensaje no es un objeto JSON válido");
+
+      if (json.cmd) {
+        broadcastExcept(ws, JSON.stringify({ cmd: json.cmd }));
+        return;
       }
 
-      if (data.tipo === "comando_at") {
-        broadcast({ tipo: "comando_at", comando: data.comando });
+      if (json.tipo === "get_umbrales") {
+        const raw = fs.readFileSync(umbralesPath);
+        const config = JSON.parse(raw);
+        ws.send(JSON.stringify({ umbrales: config }));
+        return;
       }
 
-      if (data.tipo === "get_umbrales") {
-        const umbrales = JSON.parse(fs.readFileSync("data/umbrales.json"));
-        ws.send(JSON.stringify({ tipo: "umbrales_actuales", datos: umbrales }));
+      if (json.config) {
+        fs.writeFileSync(umbralesPath, JSON.stringify(json.config, null, 2));
+        console.log("💾 Umbrales actualizados en disco.");
+        broadcastExcept(ws, JSON.stringify({ umbrales: json.config }));
+        return;
       }
 
-      if (data.tipo === "set_umbrales") {
-        fs.writeFileSync("data/umbrales.json", JSON.stringify(data.datos, null, 2));
-        broadcast({ tipo: "umbrales_actualizados", datos: data.datos });
+      if (json.id !== undefined) {
+        logCache.push({ ...json, timestamp: Date.now() });
+        broadcastAll(JSON.stringify(json));
+        return;
       }
 
-    } catch (err) {
-      console.error("Error al procesar mensaje:", err.message);
+      if (Array.isArray(json)) {
+        const timestamp = Date.now();
+        for (const p of json) logCache.push({ ...p, timestamp });
+        broadcastAll(JSON.stringify(json));
+        return;
+      }
+
+      if (json.evento === "cruce" && Array.isArray(json.trayectoria)) {
+        const key = json.trayectoria.join("->");
+        const contadores = JSON.parse(fs.readFileSync(contadoresPath));
+        contadores[key] = (contadores[key] || 0) + 1;
+        fs.writeFileSync(contadoresPath, JSON.stringify(contadores));
+        broadcastAll(JSON.stringify({ tipo: "contador", key, valor: contadores[key] }));
+        return;
+      }
+
+      if (json.conteos) {
+        broadcastAll(JSON.stringify(json));
+        return;
+      }
+
+    } catch (e) {
+      console.warn(`❌ Mensaje inválido desde ${ip}:`, texto);
+      console.warn(`🛠️ Detalle:`, e.message);
     }
   });
 
-  ws.on("close", () => console.log("Cliente desconectado"));
+  ws.on("close", () => {
+    clients = clients.filter(c => c !== ws);
+    console.log("❌ Cliente desconectado. Quedan:", clients.length);
+  });
 });
 
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Servidor WebSocket activo en puerto ${PORT}`);
+  console.log("🌐 Servidor corriendo en puerto", PORT);
 });
