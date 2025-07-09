@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Conteo por Umbral Cuadrado v7.1.2</title>
+  <style>
+    body { margin: 0; background: black; overflow: hidden; }
+    canvas { display: block; }
+    #resetHeatmap {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 2;
+      background: #fff;
+      border: none;
+      padding: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+<div style="position: relative; width: 900px; height: 800px; margin: auto;">
+
+  <canvas id="canvas" width="900" height="800" style="position: absolute; top: 0; left: 0; z-index: 1;"></canvas>
+
+  <div id="heatmapContainer" style="position: absolute; top: 0; left: 0; width: 900px; height: 800px; z-index: 2; pointer-events: none;"></div>
+
+  <button id="resetHeatmap" style="position: absolute; top: 10px; right: 10px; z-index: 3;">🧹 Reset mapa</button>
+
+  <div id="config" style="position: absolute; top: 50px; right: 10px; z-index: 3; background: #222; color: white; padding: 10px; font-family: monospace; border-radius: 8px;">
+    <h4>⚙️ Umbral Amarillo</h4>
+    Ancho (m): <input type="number" step="0.1" id="anchoInput" value="2.0" style="width: 60px;"><br>
+    Alto (m): <input type="number" step="0.1" id="altoInput" value="1.5" style="width: 60px;"><br>
+    <hr>
+    Centro X: <input type="number" step="0.1" id="inputCx" value="0" style="width: 60px;"><br>
+    Centro Y: <input type="number" step="0.1" id="inputCy" value="0" style="width: 60px;"><br><br>
+    <hr>
+<h4>🟦 Zona A</h4>
+Ancho (m): <input type="number" step="0.1" id="anchoA" value="1.0" style="width: 60px;"><br>
+Alto (m): <input type="number" step="0.1" id="altoA" value="1.0" style="width: 60px;"><br>
+<hr>
+Centro X: <input type="number" step="0.1" id="cxA" value="2.0" style="width: 60px;"><br>
+Centro Y: <input type="number" step="0.1" id="cyA" value="2.0" style="width: 60px;"><br>
+
+<hr>
+<h4>🟥 Zona B</h4>
+Ancho (m): <input type="number" step="0.1" id="anchoB" value="1.0" style="width: 60px;"><br>
+Alto (m): <input type="number" step="0.1" id="altoB" value="1.0" style="width: 60px;"><br>
+<hr>
+Centro X: <input type="number" step="0.1" id="cxB" value="-2.0" style="width: 60px;"><br>
+Centro Y: <input type="number" step="0.1" id="cyB" value="-2.0" style="width: 60px;"><br>
+<hr>
+<h4>🔀 Modo de conteo</h4>
+<select id="modoConteo">
+  <option value="completo" selected>Con paso por centro</option>
+  <option value="directo">Directo (sin centro)</option>
+</select>
+<hr>
+<h4>🖼️ Modo de visualización</h4>
+<select id="modoVisual">
+  <option value="todo" selected>Todo</option>
+  <option value="solo-mapa">Solo mapa</option>
+  <option value="solo-tracking">Solo tracking</option>
+  <option value="apagado">Apagado (solo conteo)</option>
+</select>
+<div id="estadoWS" style="margin-top: 10px; font-weight: bold; color: lime;">🟢 WebSocket conectado</div>
+
+<hr>
+    <button onclick="actualizarConfiguracion()">Actualizar</button>
+  </div>
+</div>
+
+
+	
+
+<script src="https://cdn.jsdelivr.net/npm/heatmapjs@2.0.2/heatmap.min.js"></script>
+<script>
+let ultimoUpdatePorId = {};
+const EXPIRACION_MS = 5000; // Tiempo de vida de un ID (5 segundos)
+
+let umbralCentroAncho = 1.0;
+let umbralCentroAlto  = 1.0;
+let estadoPersona = {};
+let ultimaPosicion = {};
+let caidasPorId = {};  // ya lo tenés, mantenelo
+
+let umbralesRecibidos = false;
+const socket = new WebSocket("wss://ws-server-zwos.onrender.com");
+const estadoWS = document.getElementById("estadoWS");
+let timeoutID = null;
+
+function enviarSolicitudUmbrales(maxIntentos = 3, delay = 2000, inicioDelay = 500) {
+  let intentos = 0;
+
+  const intentar = () => {
+    if (umbralesRecibidos) {
+      console.log("✅ Umbrales ya recibidos, se detienen los reintentos");
+      clearTimeout(timeoutID);
+      return;
+    }
+
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ tipo: "get_umbrales" }));
+      console.log("📤 Solicitud de umbrales enviada (intento " + (intentos + 1) + ")");
+    }
+
+    intentos++;
+    if (intentos < maxIntentos && !umbralesRecibidos) {
+      timeoutID = setTimeout(intentar, delay);
+    } else if (!umbralesRecibidos) {
+      console.error("❌ No se recibieron los umbrales después de varios intentos");
+    }
+  };
+
+  timeoutID = setTimeout(intentar, inicioDelay);
+}
+
+
+
+socket.onopen = () => {
+  console.log("✅ WebSocket conectado");
+  estadoWS.textContent = "🟢 WebSocket conectado";
+  estadoWS.style.color = "lime";
+
+  // Esperar 200 ms y verificar conexión real antes de enviar
+ setTimeout(() => {
+   enviarSolicitudUmbrales();  // ✅ ahora se pide al servidor la config
+}, 500);
+
+  // Enviar ping cada 25 segundos para mantener vivo
+  setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ tipo: "ping" }));
+    }
+  }, 25000);
+};
+
+
+function actualizarUmbral() {
+  const ancho = parseFloat(document.getElementById('anchoInput').value);
+  const alto = parseFloat(document.getElementById('altoInput').value);
+  if (!isNaN(ancho) && !isNaN(alto)) {
+    umbralCentroAncho = ancho;
+    umbralCentroAlto = alto;
+    console.log(`🔁 Nuevo umbral: ${ancho}m x ${alto}m`);
+  }
+}
+
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const escalaX = canvas.width / 9;
+const escalaY = canvas.height / 9;
+let cx = 0.0; // Centro X inicial
+let cy = 0.0; // Centro Y inicial
+let zonaA = { cx: 2, cy: 2, ancho: 1, alto: 1 };
+let zonaB = { cx: -2, cy: -2, ancho: 1, alto: 1 };
+
+
+function determinarZonaCentro(x, y) {
+  if (Math.abs(x + cx) < umbralCentroAncho / 2 && Math.abs(y - cy) < umbralCentroAlto / 2) return 'centro';
+  if (y > cy + umbralCentroAlto / 2) return 'norte';
+  if (y < cy - umbralCentroAlto / 2) return 'sur';
+  if (x > -cx + umbralCentroAncho / 2) return 'este';
+  if (x < -cx - umbralCentroAncho / 2) return 'oeste';
+  return 'otro';
+}
+
+function determinarZonaA(x, y) {
+  if (Math.abs(x + zonaA.cx) < zonaA.ancho / 2 && Math.abs(y - zonaA.cy) < zonaA.alto / 2) return 'centroA';
+  if (y > zonaA.cy + zonaA.alto / 2) return 'norteA';
+  if (y < zonaA.cy - zonaA.alto / 2) return 'surA';
+  if (x > zonaA.cx + zonaA.ancho / 2) return 'esteA';
+  if (x < zonaA.cx - zonaA.ancho / 2) return 'oesteA';
+  return 'otro';
+}
+
+function determinarZonaB(x, y) {
+  if (Math.abs(x + zonaB.cx) < zonaB.ancho / 2 && Math.abs(y - zonaB.cy) < zonaB.alto / 2) return 'centroB';
+  if (y > zonaB.cy + zonaB.alto / 2) return 'norteB';
+  if (y < zonaB.cy - zonaB.alto / 2) return 'surB';
+  if (x > zonaB.cx + zonaB.ancho / 2) return 'esteB';
+  if (x < zonaB.cx - zonaB.ancho / 2) return 'oesteB';
+  return 'otro';
+}
+
+
+
+function transformar(x, y) {
+  return {
+    x: canvas.width / 2 - x * escalaX,  // EJE X INVERTIDO
+    y: canvas.height / 2 - y * escalaY  // EJE Y NORMAL
+  };
+}
+
+
+const heatmap = h337.create({
+  container: document.getElementById("heatmapContainer"),
+  radius: 40,
+  maxOpacity: 0.6,
+  minOpacity: 0.05,
+  blur: 0.85
+});
+
+let puntosCalor = [];
+
+let trails = {};
+let ultimaPersonaPorId = {};
+let historialZona = {};
+let historialZonaCentro = {};
+let historialZonaA = {};
+let historialZonaB = {};
+
+let zonaAnterior = {};
+let conteo = { escalera: 0, laboratorio: 0 };
+let cruces = {
+  // Umbral central (amarillo)
+  sur_centro_norte: 0,
+  norte_centro_sur: 0,
+  este_centro_oeste: 0,
+  oeste_centro_este: 0,
+
+  // Zona A (cyan)
+  surA_centroA_norteA: 0,
+  norteA_centroA_surA: 0,
+  esteA_centroA_oesteA: 0,
+  oesteA_centroA_esteA: 0,
+
+  // Zona B (magenta)
+  surB_centroB_norteB: 0,
+  norteB_centroB_surB: 0,
+  esteB_centroB_oesteB: 0,
+  oesteB_centroB_esteB: 0
+};
+
+let lastTimestamp = null;
+let latencias = [], frecVentana = [];
+let bufferMensajes = [];
+const maxHistorial = 10;
+document.getElementById("resetHeatmap").onclick = () => {
+  puntosCalor = [];
+  heatmap.setData({ max: 10, data: [] });
+
+  cruces = {
+    // Umbral central
+    sur_centro_norte: 0,
+    norte_centro_sur: 0,
+    este_centro_oeste: 0,
+    oeste_centro_este: 0,
+
+    // Zona A (cyan)
+    surA_centroA_norteA: 0,
+    norteA_centroA_surA: 0,
+    esteA_centroA_oesteA: 0,
+    oesteA_centroA_esteA: 0,
+
+    // Zona B (magenta)
+    surB_centroB_norteB: 0,
+    norteB_centroB_surB: 0,
+    esteB_centroB_oesteB: 0,
+    oesteB_centroB_esteB: 0
+  };
+
+  localStorage.removeItem("heatmap_puntos");
+  localStorage.removeItem("heatmap_cruces");
+
+  console.log("🧹 Mapa de calor y contadores reiniciados");
+};
+
+function aplicarConfiguracionLocal(config) {
+  umbralCentroAncho = config.ancho ?? 2.0;
+  umbralCentroAlto  = config.alto ?? 1.5;
+  cx = config.cx ?? 0;
+  cy = config.cy ?? 0;
+
+  zonaA = config.zonaA ?? zonaA;
+  zonaB = config.zonaB ?? zonaB;
+
+  // Asignar inputs si querés
+  document.getElementById("anchoInput").value = umbralCentroAncho;
+  document.getElementById("altoInput").value  = umbralCentroAlto;
+  document.getElementById("inputCx").value    = cx;
+  document.getElementById("inputCy").value    = cy;
+
+  document.getElementById("anchoA").value = zonaA.ancho;
+  document.getElementById("altoA").value  = zonaA.alto;
+  document.getElementById("cxA").value    = zonaA.cx;
+  document.getElementById("cyA").value    = zonaA.cy;
+
+  document.getElementById("anchoB").value = zonaB.ancho;
+  document.getElementById("altoB").value  = zonaB.alto;
+  document.getElementById("cxB").value    = zonaB.cx;
+  document.getElementById("cyB").value    = zonaB.cy;
+
+  document.getElementById("modoConteo").value = config.modo ?? "completo";
+
+  draw(); // 👈 forzá actualización visual
+}
+
+function drawArrow(fromX, fromY, toX, toY, color = "#0ff") {
+  const headlen = 10;
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(fromX, fromY); ctx.lineTo(toX, toY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(toX, toY);
+  ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
+  ctx.closePath(); ctx.fill();
+}
+
+function detectarUmbral(p) {
+  const id = p.id, x = p.x, y = p.y;
+
+
+const zonaC = determinarZonaCentro(x, y);
+const zonaA_ = determinarZonaA(x, y);
+const zonaB_ = determinarZonaB(x, y);
+
+// Historial por cada zona
+if (!historialZonaCentro[id]) historialZonaCentro[id] = [];
+if (!historialZonaA[id]) historialZonaA[id] = [];
+if (!historialZonaB[id]) historialZonaB[id] = [];
+
+// Centro
+const histC = historialZonaCentro[id];
+if (zonaC !== 'otro' && (histC.length === 0 || histC.at(-1) !== zonaC)) {
+  histC.push(zonaC);
+  if (histC.length > maxHistorial) histC.shift();
+}
+
+// Zona A
+const histA = historialZonaA[id];
+if (zonaA_ !== 'otro' && (histA.length === 0 || histA.at(-1) !== zonaA_)) {
+  histA.push(zonaA_);
+  if (histA.length > maxHistorial) histA.shift();
+}
+
+// Zona B
+const histB = historialZonaB[id];
+if (zonaB_ !== 'otro' && (histB.length === 0 || histB.at(-1) !== zonaB_)) {
+  histB.push(zonaB_);
+  if (histB.length > maxHistorial) histB.shift();
+}
+// Función compartida
+const buscarOrden = (h, a, b, c) => {
+  const i1 = h.indexOf(a);
+  const i2 = h.indexOf(b, i1 + 1);
+  const i3 = h.indexOf(c, i2 + 1);
+  return i1 !== -1 && i2 !== -1 && i3 !== -1;
+};
+const buscarOrden2 = (h, a, b) => {
+  const i1 = h.indexOf(a);
+  const i2 = h.indexOf(b, i1 + 1);
+  return i1 !== -1 && i2 !== -1;
+};
+
+const modo = document.getElementById("modoConteo")?.value || "completo";
+
+
+const coincidencias = [];
+// ZONA CENTRAL
+if ((modo === "completo" && buscarOrden(histC, 'sur', 'centro', 'norte')) ||
+    (modo === "directo" && buscarOrden2(histC, 'sur', 'norte'))) {
+  cruces.sur_centro_norte++;
+  coincidencias.push('central: sur→norte');
+}
+
+if ((modo === "completo" && buscarOrden(histC, 'norte', 'centro', 'sur')) ||
+    (modo === "directo" && buscarOrden2(histC, 'norte', 'sur'))) {
+  cruces.norte_centro_sur++;
+  coincidencias.push('central: norte→sur');
+}
+
+if ((modo === "completo" && buscarOrden(histC, 'este', 'centro', 'oeste')) ||
+    (modo === "directo" && buscarOrden2(histC, 'este', 'oeste'))) {
+  cruces.este_centro_oeste++;
+  coincidencias.push('central: este→oeste');
+}
+
+if ((modo === "completo" && buscarOrden(histC, 'oeste', 'centro', 'este')) ||
+    (modo === "directo" && buscarOrden2(histC, 'oeste', 'este'))) {
+  cruces.oeste_centro_este++;
+  coincidencias.push('central: oeste→este');
+}
+
+// ZONA A
+if ((modo === "completo" && buscarOrden(histA, 'surA', 'centroA', 'norteA')) ||
+    (modo === "directo" && buscarOrden2(histA, 'surA', 'norteA'))) {
+  cruces.surA_centroA_norteA++;
+  coincidencias.push('zonaA: sur→norte');
+}
+
+if ((modo === "completo" && buscarOrden(histA, 'norteA', 'centroA', 'surA')) ||
+    (modo === "directo" && buscarOrden2(histA, 'norteA', 'surA'))) {
+  cruces.norteA_centroA_surA++;
+  coincidencias.push('zonaA: norte→sur');
+}
+
+if ((modo === "completo" && buscarOrden(histA, 'esteA', 'centroA', 'oesteA')) ||
+    (modo === "directo" && buscarOrden2(histA, 'esteA', 'oesteA'))) {
+  cruces.esteA_centroA_oesteA++;
+  coincidencias.push('zonaA: este→oeste');
+}
+
+if ((modo === "completo" && buscarOrden(histA, 'oesteA', 'centroA', 'esteA')) ||
+    (modo === "directo" && buscarOrden2(histA, 'oesteA', 'esteA'))) {
+  cruces.oesteA_centroA_esteA++;
+  coincidencias.push('zonaA: oeste→este');
+}
+
+// ZONA B
+if ((modo === "completo" && buscarOrden(histB, 'surB', 'centroB', 'norteB')) ||
+    (modo === "directo" && buscarOrden2(histB, 'surB', 'norteB'))) {
+  cruces.surB_centroB_norteB++;
+  coincidencias.push('zonaB: sur→norte');
+}
+
+if ((modo === "completo" && buscarOrden(histB, 'norteB', 'centroB', 'surB')) ||
+    (modo === "directo" && buscarOrden2(histB, 'norteB', 'surB'))) {
+  cruces.norteB_centroB_surB++;
+  coincidencias.push('zonaB: norte→sur');
+}
+
+if ((modo === "completo" && buscarOrden(histB, 'esteB', 'centroB', 'oesteB')) ||
+    (modo === "directo" && buscarOrden2(histB, 'esteB', 'oesteB'))) {
+  cruces.esteB_centroB_oesteB++;
+  coincidencias.push('zonaB: este→oeste');
+}
+
+if ((modo === "completo" && buscarOrden(histB, 'oesteB', 'centroB', 'esteB')) ||
+    (modo === "directo" && buscarOrden2(histB, 'oesteB', 'esteB'))) {
+  cruces.oesteB_centroB_esteB++;
+  coincidencias.push('zonaB: oeste→este');
+}
+
+if (coincidencias.length > 0) {
+  historialZonaCentro[id] = [];
+  historialZonaA[id] = [];
+  historialZonaB[id] = [];
+  console.log("✅ Trayectorias detectadas:", coincidencias.join(" | "));
+}
+
+
+
+
+}
+window.onload = () => {
+  if (!umbralesRecibidos) {
+    const savedA = localStorage.getItem("zonaA");
+    if (savedA) {
+      zonaA = JSON.parse(savedA);
+      document.getElementById("anchoA").value = zonaA.ancho;
+      document.getElementById("altoA").value = zonaA.alto;
+      document.getElementById("cxA").value = zonaA.cx;
+      document.getElementById("cyA").value = zonaA.cy;
+    }
+
+    const savedB = localStorage.getItem("zonaB");
+    if (savedB) {
+      zonaB = JSON.parse(savedB);
+      document.getElementById("anchoB").value = zonaB.ancho;
+      document.getElementById("altoB").value = zonaB.alto;
+      document.getElementById("cxB").value = zonaB.cx;
+      document.getElementById("cyB").value = zonaB.cy;
+    }
+
+    const savedCx = localStorage.getItem("heatmap_cx");
+    const savedCy = localStorage.getItem("heatmap_cy");
+    const savedAncho = localStorage.getItem("heatmap_ancho");
+    const savedAlto = localStorage.getItem("heatmap_alto");
+
+    if (savedCx !== null) {
+      cx = parseFloat(savedCx);
+      document.getElementById("inputCx").value = cx;
+    }
+    if (savedCy !== null) {
+      cy = parseFloat(savedCy);
+      document.getElementById("inputCy").value = cy;
+    }
+    if (savedAncho !== null) {
+      umbralCentroAncho = parseFloat(savedAncho);
+      document.getElementById("anchoInput").value = umbralCentroAncho;
+    }
+    if (savedAlto !== null) {
+      umbralCentroAlto = parseFloat(savedAlto);
+      document.getElementById("altoInput").value = umbralCentroAlto;
+    }
+  }
+
+  actualizarVisibilidad();
+};
+
+
+
+function actualizarConfiguracion() {
+  const ancho = parseFloat(document.getElementById('anchoInput').value);
+  const alto = parseFloat(document.getElementById('altoInput').value);
+  const nuevoCx = parseFloat(document.getElementById('inputCx').value);
+  const nuevoCy = parseFloat(document.getElementById('inputCy').value);
+  const modo = document.getElementById("modoConteo").value;
+
+
+  if (!isNaN(ancho)) umbralCentroAncho = ancho;
+  if (!isNaN(alto))  umbralCentroAlto  = alto;
+  if (!isNaN(nuevoCx)) cx = nuevoCx;
+  if (!isNaN(nuevoCy)) cy = nuevoCy;
+
+  // Guardar en localStorage
+  localStorage.setItem("heatmap_cx", cx);
+  localStorage.setItem("heatmap_cy", cy);
+  localStorage.setItem("heatmap_ancho", umbralCentroAncho);
+  localStorage.setItem("heatmap_alto", umbralCentroAlto);
+
+  zonaA.ancho = parseFloat(document.getElementById("anchoA").value);
+zonaA.alto  = parseFloat(document.getElementById("altoA").value);
+zonaA.cx    = parseFloat(document.getElementById("cxA").value);
+zonaA.cy    = parseFloat(document.getElementById("cyA").value);
+
+zonaB.ancho = parseFloat(document.getElementById("anchoB").value);
+zonaB.alto  = parseFloat(document.getElementById("altoB").value);
+zonaB.cx    = parseFloat(document.getElementById("cxB").value);
+zonaB.cy    = parseFloat(document.getElementById("cyB").value);
+
+  console.log(`🔁 Centro: (${cx}, ${cy}) | Umbral: ${umbralCentroAncho}m x ${umbralCentroAlto}m`);
+localStorage.setItem("zonaA", JSON.stringify(zonaA));
+localStorage.setItem("zonaB", JSON.stringify(zonaB));
+
+draw(); // fuerza redibujado inmediato
+  const config = {
+    ancho: umbralCentroAncho,
+    alto: umbralCentroAlto,
+    cx, cy,
+    zonaA, zonaB,
+    modo
+  };
+
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ config }));
+    console.log("📤 Configuración enviada a Node-RED:", config);
+  } else {
+    console.warn("⚠️ WebSocket no conectado");
+  }
+
+
+}
+function actualizarVisibilidad() {
+  const modo = document.getElementById("modoVisual")?.value || "todo";
+  const canvasEl = document.getElementById("canvas");
+  const mapaEl = document.getElementById("heatmapContainer");
+
+  if (modo === "todo") {
+    canvasEl.style.display = "block";
+    mapaEl.style.display = "block";
+  } else if (modo === "solo-mapa") {
+    canvasEl.style.display = "block";
+    mapaEl.style.display = "block";
+  } else if (modo === "solo-tracking") {
+    canvasEl.style.display = "block";
+    mapaEl.style.display = "none";
+  } else if (modo === "apagado") {
+    canvasEl.style.display = "block";  // solo se limpia visualmente
+    mapaEl.style.display = "none";
+  }
+  requestAnimationFrame(draw);
+
+}
+document.getElementById("modoVisual").addEventListener("change", actualizarVisibilidad);
+
+document.getElementById("modoConteo").addEventListener("change", () => {
+  requestAnimationFrame(draw);
+});
+function procesarMensajes() {
+ 
+  const ahora = Date.now();
+  const modoVisual = document.getElementById("modoVisual")?.value || "todo";
+
+ while (bufferMensajes.length > 0) {
+  const mensaje = bufferMensajes.pop();
+    try {
+      const data = typeof mensaje === "string" ? JSON.parse(mensaje) : mensaje;
+
+      const personas = Array.isArray(data) ? data : data.people;
+
+      personas.forEach(p => {
+        ultimoUpdatePorId[p.id] = ahora;
+
+        const id = p.id;
+        const px = p.x;
+        const py = p.y;
+        const z = p.z ?? 1.0;
+        const vx = p.vx ?? 0;
+        const vy = p.vy ?? 0;
+        const vz = p.vz ?? 0;
+
+        const vtotal = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        const ultima = ultimaPosicion[id];
+        const desplazamiento = ultima
+          ? Math.sqrt((px - ultima.x) ** 2 + (py - ultima.y) ** 2 + (z - ultima.z) ** 2)
+          : 0;
+        ultimaPosicion[id] = { x: px, y: py, z };
+
+        const umbralVelAlta = 0.5;
+        const umbralVelBaja = 0.1;
+        const umbralDisp = 0.05;
+        const zCaida = 1.2;
+        const tiempoCaida = 5000;
+
+        if (vtotal > umbralVelAlta) {
+          estadoPersona[id] = "movimiento";
+          caidasPorId[id] = null;
+        } else if (vtotal < umbralVelBaja && desplazamiento < umbralDisp && z > zCaida) {
+          if (estadoPersona[id] === "movimiento") {
+            if (!caidasPorId[id]) {
+              caidasPorId[id] = Date.now();
+            } else if (Date.now() - caidasPorId[id] > tiempoCaida) {
+              estadoPersona[id] = "caido";
+              console.warn(`🛑 Caída confirmada (ID ${id})`);
+              socket.send(JSON.stringify({
+                evento: "caida",
+                id, x: px, y: py, z, timestamp: Date.now()
+              }));
+            }
+          }
+        }
+
+        detectarUmbral(p);
+        ultimaPersonaPorId[p.id] = p;
+
+        if (!trails[p.id]) trails[p.id] = [];
+        const { x, y } = transformar(px, py);
+        trails[p.id].push({ x, y });
+        if (trails[p.id].length > 20) trails[p.id].shift();
+
+        puntosCalor.push({ x, y, t: ahora });
+      });
+      
+      
+
+      puntosCalor = puntosCalor.filter(p => Date.now() - p.t < 3600000);
+
+     
+
+    } catch (e) {
+      console.error("❌ Error al procesar:", e);
+    }
+  }
+
+  // Eliminar personas expiradas
+  for (let id in ultimoUpdatePorId) {
+    if (ahora - ultimoUpdatePorId[id] > EXPIRACION_MS) {
+      delete trails[id];
+      delete ultimaPersonaPorId[id];
+      delete historialZona[id];
+      delete zonaAnterior[id];
+      delete ultimoUpdatePorId[id];
+    }
+  }
+}
+let ultimaActualizacionMapa = 0;
+const INTERVALO_MAPA_MS = 500;  // cada 0.5 segundos
+function draw() {
+  procesarMensajes();
+
+  const modoVisual = document.getElementById("modoVisual")?.value || "todo";
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+const ui = transformar(-cx - umbralCentroAncho / 2, cy - umbralCentroAlto / 2);
+const uf = transformar(-cx + umbralCentroAncho / 2, cy + umbralCentroAlto / 2);
+
+
+  ctx.strokeStyle = "yellow";
+  ctx.setLineDash([5, 5]);
+  ctx.strokeRect(ui.x, uf.y, uf.x - ui.x, ui.y - uf.y);
+  ctx.setLineDash([]);
+
+  // Zona A (azul)
+const a1 = transformar(-zonaA.cx - zonaA.ancho/2, zonaA.cy - zonaA.alto/2);
+const a2 = transformar(-zonaA.cx + zonaA.ancho/2, zonaA.cy + zonaA.alto/2);
+ctx.strokeStyle = "cyan";
+ctx.setLineDash([5, 3]);
+ctx.strokeRect(a1.x, a2.y, a2.x - a1.x, a1.y - a2.y);
+
+// Zona B (rojo)
+const b1 = transformar(-zonaB.cx - zonaB.ancho/2, zonaB.cy - zonaB.alto/2);
+const b2 = transformar(-zonaB.cx + zonaB.ancho/2, zonaB.cy + zonaB.alto/2);
+ctx.strokeStyle = "magenta";
+ctx.setLineDash([5, 3]);
+ctx.strokeRect(b1.x, b2.y, b2.x - b1.x, b1.y - b2.y);
+ctx.setLineDash([]);
+
+
+  const esc1 = transformar(-4.5, 4.3);  // Línea roja arriba
+const esc2 = transformar(4.5, 4.3);
+
+  ctx.strokeStyle = "red";
+  ctx.beginPath(); ctx.moveTo(esc1.x, esc1.y); ctx.lineTo(esc2.x, esc2.y); ctx.stroke();
+
+ const lab1 = transformar(-4.5, -4.3);  // Línea azul abajo
+const lab2 = transformar(4.5, -4.3);
+
+  ctx.strokeStyle = "blue";
+  ctx.beginPath(); ctx.moveTo(lab1.x, lab1.y); ctx.lineTo(lab2.x, lab2.y); ctx.stroke();
+
+  const t0 = performance.now();
+  if (modoVisual === "todo" || modoVisual === "solo-tracking") {
+ 
+
+  for (let id in trails) {
+    const trail = trails[id];
+    const persona = ultimaPersonaPorId[id];
+    for (let i = 0; i < trail.length; i++) {
+      const t = trail[i];
+      let alpha = i / trail.length;
+      let z = persona?.z ?? 1.5;
+      z = Math.min(Math.max(z, 1.0), 2.0);
+      let r = Math.round((z - 1.0) * 255);
+      let g = Math.round((2.0 - z) * 255);
+      ctx.fillStyle = `rgba(${r},${g},0,${alpha})`;
+      ctx.beginPath(); ctx.arc(t.x, t.y, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    const last = trail[trail.length - 1];
+    ctx.fillStyle = "#0f0";
+    ctx.font = "14px monospace";
+    ctx.fillText("ID " + id, last.x + 10, last.y);
+
+      if (estadoPersona[id] === "caido") {
+  ctx.fillStyle = "#f00";
+  ctx.font = "bold 14px monospace";
+  ctx.fillText("🛑 CAÍDO", last.x + 10, last.y + 50);
+}
+
+
+    if (persona) {
+    const dx = -persona.vx * escalaX * 0.5; // 👈 Invertido
+const dy = -persona.vy * escalaY * 0.5; // Eje Y queda igual
+drawArrow(last.x, last.y, last.x + dx, last.y + dy);
+
+      const zona = zonaAnterior[id]?.entrada ?? zonaAnterior[id] ?? '';
+      const historial = historialZona[id] ? historialZona[id].join('→') : '';
+      ctx.fillStyle = "#ff0";
+      ctx.font = "12px monospace";
+      ctx.fillText("Z: " + persona.z.toFixed(2) + " m", last.x + 10, last.y + 20);
+
+      ctx.fillText("H: " + historial, last.x + 10, last.y + 35);
+    }
+  }
+
+  
+ if (modoVisual === "apagado") {
+  // Limpiar visualización, pero igual continuar con lógica
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  heatmap.setData({ max: 10, data: [] });
+}
+
+
+
+if (modoVisual === "todo" || modoVisual === "solo-mapa") {
+  const ahora = Date.now();
+  if (ahora - ultimaActualizacionMapa > INTERVALO_MAPA_MS) {
+    ultimaActualizacionMapa = ahora;
+    heatmap.setData({
+      max: 10,
+      data: puntosCalor.map(p => ({
+        x: Math.round(p.x),
+        y: Math.round(p.y),
+        value: 1
+      }))
+    });
+  }
+}
+
+
+
+  
+ 
+  ctx.fillStyle = "white";
+  ctx.fillText("Buffer: " + bufferMensajes.length, 20, canvas.height - 20);
+  ctx.fillStyle = "white";
+  ctx.font = "18px monospace";
+    const latMed = latencias.length > 0 ? (latencias.reduce((a,b)=>a+b,0)/latencias.length).toFixed(1) : "N/A";
+  const frec = frecVentana.length > 1 ? (1000*(frecVentana.length-1)/(frecVentana.at(-1)-frecVentana[0])).toFixed(1) : "N/A";
+  ctx.fillText(`Latencia: ${latMed} ms`, 20, canvas.height - 40);
+  ctx.fillText(`Frecuencia: ${frec} Hz`, 20, canvas.height - 60);
+  ctx.fillText("CONTADORES:", 20, 30);
+  // Fondos por grupo (dibujá primero)
+ctx.fillStyle = "rgba(0,0,0,0.6)";
+ctx.fillRect(15, 35, 200, 90);   // Cardinales
+ctx.fillRect(15, 155, 200, 50);   // Zona A
+ctx.fillRect(15, 215, 200, 50);   // Zona B (subido un poco)
+
+// Bordes por grupo (colores distintos)
+ctx.strokeStyle = "yellow";
+ctx.lineWidth = 2;
+ctx.strokeRect(15, 35, 150, 80);
+
+ctx.strokeStyle = "cyan";
+ctx.strokeRect(15, 125, 150, 80);
+
+ctx.strokeStyle = "magenta";
+ctx.strokeRect(15, 215, 150, 80);
+
+// Texto contadores (dibujá después)
+ctx.fillStyle = "white";
+ctx.font = "18px monospace";
+
+ctx.fillText("CONTADORES:", 20, 30);
+ctx.fillStyle = "yellow";
+ctx.fillText("S → N: " + cruces.sur_centro_norte, 20, 50);
+ctx.fillText("N → S: " + cruces.norte_centro_sur, 20, 70);
+ctx.fillText("E → O: " + cruces.este_centro_oeste, 20, 90);
+ctx.fillText("O → E: " + cruces.oeste_centro_este, 20, 110);
+
+ctx.fillStyle = "cyan";
+ctx.fillText("S → N : " + cruces.surA_centroA_norteA, 20, 140);
+ctx.fillText("N → S : " + cruces.norteA_centroA_surA, 20, 160);
+ctx.fillText("E → O : " + cruces.esteA_centroA_oesteA, 20, 180);
+ctx.fillText("O → E : " + cruces.oesteA_centroA_esteA, 20, 200);
+
+ctx.fillStyle = "magenta";
+ctx.fillText("S → N : " + cruces.surB_centroB_norteB, 20, 230);
+ctx.fillText("N → S : " + cruces.norteB_centroB_surB, 20, 250);
+ctx.fillText("E → O : " + cruces.esteB_centroB_oesteB, 20, 270);
+ctx.fillText("O → E : " + cruces.oesteB_centroB_esteB, 20, 290);
+ requestAnimationFrame(draw);
+
+
+//console.log(`⏱ Tiempo draw(): ${(t1 - t0).toFixed(1)} ms`);
+}
+
+}
+
+
+const puntosGuardados = localStorage.getItem("heatmap_puntos");
+if (puntosGuardados) {
+  puntosCalor = JSON.parse(puntosGuardados);
+  puntosCalor = puntosCalor.filter(p => Date.now() - p.t < 60 * 60 * 1000);  // limpieza si hay datos antiguos
+}
+heatmap.setData({ max: 10, data: puntosCalor.map(p => ({ x: Math.round(p.x), y: Math.round(p.y), value: 1 })) });
+
+const crucesGuardados = localStorage.getItem("heatmap_cruces");
+if (crucesGuardados) cruces = JSON.parse(crucesGuardados);
+
+const conteoGuardado = localStorage.getItem("heatmap_conteo");
+if (conteoGuardado) conteo = JSON.parse(conteoGuardado);
+
+draw();
+
+
+socket.onclose = () => {
+  console.warn("⚠️ WebSocket cerrado");
+  estadoWS.textContent = "🔴 WebSocket desconectado";
+  estadoWS.style.color = "red";
+};
+
+socket.onerror = (e) => {
+  console.error("❌ Error WebSocket", e);
+  estadoWS.textContent = "🔴 WebSocket con error";
+  estadoWS.style.color = "orange";
+};
+
+
+socket.onmessage = event => {
+  const now = Date.now();
+  let data = null;
+
+  const guardar = msg => bufferMensajes.push(msg);
+
+  if (event.data instanceof Blob) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        data = JSON.parse(reader.result);
+        if (data.umbrales) {
+           umbralesRecibidos = true;  // ✅ se detendrán los reintentos
+          const u = data.umbrales;
+
+          document.getElementById("anchoInput").value = u.ancho ?? 2.0;
+          document.getElementById("altoInput").value = u.alto ?? 1.5;
+          document.getElementById("inputCx").value = u.cx ?? 0;
+          document.getElementById("inputCy").value = u.cy ?? 0;
+
+          document.getElementById("anchoA").value = u.zonaA?.ancho ?? 1.0;
+          document.getElementById("altoA").value = u.zonaA?.alto ?? 1.0;
+          document.getElementById("cxA").value = u.zonaA?.cx ?? 2.0;
+          document.getElementById("cyA").value = u.zonaA?.cy ?? 2.0;
+
+          document.getElementById("anchoB").value = u.zonaB?.ancho ?? 1.0;
+          document.getElementById("altoB").value = u.zonaB?.alto ?? 1.0;
+          document.getElementById("cxB").value = u.zonaB?.cx ?? -2.0;
+          document.getElementById("cyB").value = u.zonaB?.cy ?? -2.0;
+
+          document.getElementById("modoConteo").value = u.modo ?? "completo";
+          console.log("📥 Umbrales sincronizados (Blob):", u);
+
+            localStorage.setItem("heatmap_ancho", u.ancho ?? 2.0);
+            localStorage.setItem("heatmap_alto", u.alto ?? 1.5);
+             localStorage.setItem("heatmap_cx", u.cx ?? 0);
+             localStorage.setItem("heatmap_cy", u.cy ?? 0);
+
+             localStorage.setItem("zonaA", JSON.stringify(u.zonaA ?? { ancho: 1.0, alto: 1.0, cx: 2.0, cy: 2.0 }));
+            localStorage.setItem("zonaB", JSON.stringify(u.zonaB ?? { ancho: 1.0, alto: 1.0, cx: -2.0, cy: -2.0 }));
+
+  console.log("💾 Umbrales guardados también en localStorage.");
+aplicarConfiguracionLocal(u);
+
+          draw();
+          return; // No guardar al buffer
+        }
+      } catch (e) {
+        guardar(reader.result); // guardar si no es umbral
+      }
+    };
+    reader.readAsText(event.data);
+  } else {
+    try {
+      data = JSON.parse(event.data);
+
+      // ✅ RESPONDER A PING SI LLEGA
+ if (data.tipo === "ping") {
+  socket.send("{}"); // estructura vacía
+  console.log("📤 Keep-alive vacío enviado");
+  return;
+} 
+
+      if (data.umbrales) {
+        umbralesRecibidos = true;
+        const u = data.umbrales;
+
+        document.getElementById("anchoInput").value = u.ancho ?? 2.0;
+        document.getElementById("altoInput").value = u.alto ?? 1.5;
+        document.getElementById("inputCx").value = u.cx ?? 0;
+        document.getElementById("inputCy").value = u.cy ?? 0;
+
+        document.getElementById("anchoA").value = u.zonaA?.ancho ?? 1.0;
+        document.getElementById("altoA").value = u.zonaA?.alto ?? 1.0;
+        document.getElementById("cxA").value = u.zonaA?.cx ?? 2.0;
+        document.getElementById("cyA").value = u.zonaA?.cy ?? 2.0;
+
+        document.getElementById("anchoB").value = u.zonaB?.ancho ?? 1.0;
+        document.getElementById("altoB").value = u.zonaB?.alto ?? 1.0;
+        document.getElementById("cxB").value = u.zonaB?.cx ?? -2.0;
+        document.getElementById("cyB").value = u.zonaB?.cy ?? -2.0;
+
+        document.getElementById("modoConteo").value = u.modo ?? "completo";
+        console.log("📥 Umbrales sincronizados (Text):", u);
+          localStorage.setItem("heatmap_ancho", u.ancho ?? 2.0);
+  localStorage.setItem("heatmap_alto", u.alto ?? 1.5);
+  localStorage.setItem("heatmap_cx", u.cx ?? 0);
+  localStorage.setItem("heatmap_cy", u.cy ?? 0);
+
+  localStorage.setItem("zonaA", JSON.stringify(u.zonaA ?? { ancho: 1.0, alto: 1.0, cx: 2.0, cy: 2.0 }));
+  localStorage.setItem("zonaB", JSON.stringify(u.zonaB ?? { ancho: 1.0, alto: 1.0, cx: -2.0, cy: -2.0 }));
+
+  console.log("💾 Umbrales guardados también en localStorage.");
+aplicarConfiguracionLocal(u);
+
+        draw();
+        return; // No guardar al buffer
+      }
+    } catch (e) {
+      // no es JSON → guardar igual
+    }
+
+   try {
+  const parsed = JSON.parse(event.data);
+  guardar(parsed);
+} catch (e) {
+  console.warn("⚠️ Dato no parseable:", event.data);
+}
+
+  }
+
+  // registrar latencia solo para datos normales
+  if (lastTimestamp !== null) {
+    const dt = now - lastTimestamp;
+    latencias.push(dt); if (latencias.length > 50) latencias.shift();
+    frecVentana.push(now); if (frecVentana.length > 50) frecVentana.shift();
+  }
+  lastTimestamp = now;
+};
+
+
+
+
+
+setInterval(() => {
+  localStorage.setItem("heatmap_puntos", JSON.stringify(puntosCalor));
+  localStorage.setItem("heatmap_cruces", JSON.stringify(cruces));
+  localStorage.setItem("heatmap_conteo", JSON.stringify(conteo));
+}, 10000);
+
+</script>
+</body>
+
+
+</html>
