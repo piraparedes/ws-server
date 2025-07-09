@@ -10,6 +10,11 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 
+// ✅ Ruta raíz para que Render responda correctamente
+app.get("/", (req, res) => {
+  res.send("🟢 Servidor WebSocket activo");
+});
+
 // Crear carpeta de datos si no existe
 if (!fs.existsSync("data")) fs.mkdirSync("data");
 
