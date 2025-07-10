@@ -1,1 +1,19 @@
-{}
+{}{
+  "ancho": 1.5,
+  "alto": 2.0,
+  "cx": 0,
+  "cy": 0,
+  "zonaA": {
+    "cx": 2,
+    "cy": 2,
+    "ancho": 1,
+    "alto": 1
+  },
+  "zonaB": {
+    "cx": -2,
+    "cy": -2,
+    "ancho": 1,
+    "alto": 1
+  },
+  "modo": "completo"
+}
