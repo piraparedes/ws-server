@@ -110,7 +110,7 @@ programarResetContadores();
 setInterval(() => {
   try {
     fs.writeFileSync(movementsPath, JSON.stringify(logCache));
-    console.log("💾 Movimientos guardados a disco.");
+    //console.log("💾 Movimientos guardados a disco.");
   } catch (e) {
     console.error("❌ Error guardando movimientos:", e);
   }
