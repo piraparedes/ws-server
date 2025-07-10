@@ -1,4 +1,4 @@
-
+// app.js listo para Render o Railway
 const express = require("express");
 const http = require("http");
 const { Server: WebSocketServer } = require("ws");
@@ -8,12 +8,19 @@ const cron = require("node-cron");
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server }); // WebSocket sin path personalizado
+const wss = new WebSocketServer({ server }); // SIN path personalizado
+
+// Crear carpeta data si no existe
+const dataDir = path.join(__dirname, "data");
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir);
+  console.log("📁 Carpeta /data creada");
+}
 
 // Rutas de archivos
-const movementsPath = path.join(__dirname, "data", "movements.json");
-const contadoresPath = path.join(__dirname, "data", "contadores.json");
-const umbralesPath = path.join(__dirname, "data", "umbrales.json");
+const movementsPath = path.join(dataDir, "movements.json");
+const contadoresPath = path.join(dataDir, "contadores.json");
+const umbralesPath = path.join(dataDir, "umbrales.json");
 
 // Inicializar archivos si no existen
 if (!fs.existsSync(movementsPath)) fs.writeFileSync(movementsPath, "[]");
@@ -31,24 +38,25 @@ if (!fs.existsSync(umbralesPath)) {
   fs.writeFileSync(umbralesPath, JSON.stringify(umbralesIniciales, null, 2));
 }
 
+// Cargar movimientos a caché
 let logCache = [];
 try {
   const raw = fs.readFileSync(movementsPath);
   logCache = JSON.parse(raw);
 } catch (e) {
   logCache = [];
+  console.warn("⚠️ movements.json estaba vacío o corrupto, se inicializa vacío");
 }
 
 // Servir archivos estáticos
 app.use(express.static(path.join(__dirname, "public")));
 
-// Ruta raíz para verificación
+// Rutas API REST simples (sin /ws-server)
 app.get("/", (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.send("<h1>Servidor WebSocket activo ✅</h1>");
 });
 
-// API REST
 app.get("/movements", (req, res) => {
   try {
     const data = fs.readFileSync(movementsPath);
@@ -84,7 +92,6 @@ app.post("/hora-reset", express.json(), (req, res) => {
   }
 });
 
-// Reseteos programados
 cron.schedule("0 6 * * *", () => {
   fs.writeFileSync(movementsPath, "[]");
 });
@@ -102,7 +109,6 @@ function programarResetContadores() {
 }
 programarResetContadores();
 
-// Guardado periódico
 setInterval(() => {
   try {
     fs.writeFileSync(movementsPath, JSON.stringify(logCache));
@@ -112,16 +118,11 @@ setInterval(() => {
   }
 }, 5000);
 
-// WebSocket
 let clients = [];
-
 function broadcastExcept(sender, texto) {
   clients = clients.filter(c => c.readyState === 1);
-  clients.forEach(c => {
-    if (c !== sender) c.send(texto);
-  });
+  clients.forEach(c => { if (c !== sender) c.send(texto); });
 }
-
 function broadcastAll(texto) {
   clients = clients.filter(c => c.readyState === 1);
   clients.forEach(c => c.send(texto));
@@ -130,17 +131,13 @@ function broadcastAll(texto) {
 setInterval(() => {
   clients = clients.filter(c => c.readyState === 1);
   clients.forEach(c => {
-    try {
-      c.ping();
-    } catch (e) {
-      console.error("Error en ping:", e);
-    }
+    try { c.ping(); } catch (e) { console.error("Ping error:", e); }
   });
 }, 30000);
 
 wss.on("connection", (ws) => {
   clients.push(ws);
-  console.log("📶 Nuevo cliente conectado. Total:", clients.length);
+  console.log("📶 Cliente conectado. Total:", clients.length);
 
   ws.on("message", (message) => {
     const ip = ws._socket.remoteAddress;
@@ -148,9 +145,6 @@ wss.on("connection", (ws) => {
 
     try {
       const json = JSON.parse(texto);
-
-      if (typeof json !== "object" || json === null) throw new Error("Mensaje no es un objeto JSON válido");
-
       if (json.cmd) {
         broadcastExcept(ws, JSON.stringify({ cmd: json.cmd }));
         return;
@@ -164,8 +158,12 @@ wss.on("connection", (ws) => {
       }
 
       if (json.config) {
-        fs.writeFileSync(umbralesPath, JSON.stringify(json.config, null, 2));
-        console.log("💾 Umbrales actualizados en disco.");
+        try {
+          fs.writeFileSync(umbralesPath, JSON.stringify(json.config, null, 2));
+          console.log("💾 Umbrales guardados en disco:", umbralesPath);
+        } catch (e) {
+          console.error("❌ Error al guardar umbrales:", e);
+        }
         broadcastExcept(ws, JSON.stringify({ umbrales: json.config }));
         return;
       }
@@ -196,7 +194,6 @@ wss.on("connection", (ws) => {
         broadcastAll(JSON.stringify(json));
         return;
       }
-
     } catch (e) {
       console.warn(`❌ Mensaje inválido desde ${ip}:`, texto);
       console.warn(`🛠️ Detalle:`, e.message);
