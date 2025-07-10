@@ -7,7 +7,7 @@ const cron = require("node-cron");
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws-server" });
+const wss = new WebSocketServer({ server, path: "/" });
 
 
 // Rutas de archivos
