@@ -28,14 +28,22 @@
   <button id="resetHeatmap" style="position: absolute; top: 10px; right: 10px; z-index: 3;">🧹 Reset mapa</button>
 
   <div id="config" style="position: absolute; top: 50px; right: 10px; z-index: 3; background: #222; color: white; padding: 10px; font-family: monospace; border-radius: 8px;">
-    <h4>⚙️ Umbral Amarillo</h4>
+ <h4>
+  <span style="display:inline-block; width:1em; height:1em; background-color:#f4f80f; border-radius:0.2em; margin-right:0.5em;"></span>
+  Zona Centro
+</h4>
     Ancho (m): <input type="number" step="0.1" id="anchoInput" value="2.0" style="width: 60px;"><br>
     Alto (m): <input type="number" step="0.1" id="altoInput" value="1.5" style="width: 60px;"><br>
     <hr>
     Centro X: <input type="number" step="0.1" id="inputCx" value="0" style="width: 60px;"><br>
     Centro Y: <input type="number" step="0.1" id="inputCy" value="0" style="width: 60px;"><br><br>
     <hr>
-<h4>🟦 Zona A</h4>
+<h4>
+  <span style="display:inline-block; width:1em; height:1em; background-color:cyan; border-radius:0.2em; margin-right:0.5em;"></span>
+  Zona A
+</h4>
+
+
 Ancho (m): <input type="number" step="0.1" id="anchoA" value="1.0" style="width: 60px;"><br>
 Alto (m): <input type="number" step="0.1" id="altoA" value="1.0" style="width: 60px;"><br>
 <hr>
@@ -43,7 +51,9 @@ Centro X: <input type="number" step="0.1" id="cxA" value="2.0" style="width: 60p
 Centro Y: <input type="number" step="0.1" id="cyA" value="2.0" style="width: 60px;"><br>
 
 <hr>
-<h4>🟥 Zona B</h4>
+<h4><span style="display:inline-block; width:1em; height:1em; background-color:magenta; border-radius:0.2em; margin-right:0.5em;"></span>Zona B</h4>
+
+
 Ancho (m): <input type="number" step="0.1" id="anchoB" value="1.0" style="width: 60px;"><br>
 Alto (m): <input type="number" step="0.1" id="altoB" value="1.0" style="width: 60px;"><br>
 <hr>
