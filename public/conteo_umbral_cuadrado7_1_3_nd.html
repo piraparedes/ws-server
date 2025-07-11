@@ -95,7 +95,63 @@ let ultimaPosicion = {};
 let caidasPorId = {};  // ya lo tenés, mantenelo
 
 let umbralesRecibidos = false;
-const socket = new WebSocket("wss://ws-server-zwos.onrender.com");
+let socket;
+let reintentos = 0;
+let maxReintentos = 10;
+let delayBase = 2000; // 2 segundos
+
+function crearWebSocket() {
+  socket = new WebSocket("wss://ws-server-zwos.onrender.com");
+
+  socket.onopen = () => {
+    console.log("✅ WebSocket conectado");
+    estadoWS.textContent = "🟢 WebSocket conectado";
+    estadoWS.style.color = "lime";
+    reintentos = 0;
+
+    setTimeout(() => {
+      enviarSolicitudUmbrales(); // vuelve a pedir la config
+    }, 500);
+
+    // Mantener vivo
+    setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ tipo: "ping" }));
+      }
+    }, 25000);
+  };
+
+  socket.onclose = () => {
+    console.warn("⚠️ WebSocket cerrado");
+    estadoWS.textContent = "🔴 WebSocket desconectado";
+    estadoWS.style.color = "red";
+    intentarReconectar();
+  };
+
+  socket.onerror = (e) => {
+    console.error("❌ Error WebSocket", e);
+    estadoWS.textContent = "🔴 WebSocket con error";
+    estadoWS.style.color = "orange";
+  };
+
+  socket.onmessage = manejarMensaje;
+}
+
+function intentarReconectar() {
+  if (reintentos >= maxReintentos) {
+    console.error("❌ Se alcanzó el máximo de intentos de reconexión.");
+    return;
+  }
+
+  const delay = delayBase * Math.pow(2, reintentos);
+  console.log(`🔁 Reintentando conexión en ${delay / 1000} segundos... (intento ${reintentos + 1})`);
+
+  setTimeout(() => {
+    reintentos++;
+    crearWebSocket();
+  }, delay);
+}
+
 const estadoWS = document.getElementById("estadoWS");
 let timeoutID = null;
 
@@ -127,23 +183,6 @@ function enviarSolicitudUmbrales(maxIntentos = 3, delay = 2000, inicioDelay = 50
 
 
 
-socket.onopen = () => {
-  console.log("✅ WebSocket conectado");
-  estadoWS.textContent = "🟢 WebSocket conectado";
-  estadoWS.style.color = "lime";
-
-  // Esperar 200 ms y verificar conexión real antes de enviar
- setTimeout(() => {
-   enviarSolicitudUmbrales();  // ✅ ahora se pide al servidor la config
-}, 500);
-
-  // Enviar ping cada 25 segundos para mantener vivo
-  setInterval(() => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ tipo: "ping" }));
-    }
-  }, 25000);
-};
 
 
 function actualizarUmbral() {
@@ -221,6 +260,9 @@ let historialZonaCentro = {};
 let historialZonaA = {};
 let historialZonaB = {};
 
+let acumuladorHora = {};       // donde se acumulan los cruces de esta hora
+let horaActual = new Date().getHours();  // hora actual (ej: 17)
+
 let zonaAnterior = {};
 let conteo = { escalera: 0, laboratorio: 0 };
 let cruces = {
@@ -276,6 +318,60 @@ document.getElementById("resetHeatmap").onclick = () => {
 
   console.log("🧹 Mapa de calor y contadores reiniciados");
 };
+
+function acumularContadoresLocales() {
+  for (const clave in cruces) {
+    acumuladorHora[clave] = (acumuladorHora[clave] || 0) + cruces[clave];
+  }
+}
+
+function guardarResumenHora() {
+  const ahora = new Date();
+  const fecha = ahora.toISOString().split("T")[0]; // ejemplo: 2025-07-10
+  const horaTxt = horaActual.toString().padStart(2, "0"); // ejemplo: "18"
+  const filename = `conteo_${fecha}_${horaTxt}.txt`;
+
+  const lines = [
+    `Fecha: ${fecha}`,
+    `Hora: ${horaTxt}`,
+    "",
+    "Contadores:"
+  ];
+
+  for (const [clave, valor] of Object.entries(acumuladorHora)) {
+    lines.push(`- ${clave.replaceAll("_", " → ")}: ${valor}`);
+  }
+
+  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  console.log(`💾 Archivo guardado: ${filename}`);
+}
+
+function verificarCambioHora() {
+  const ahora = new Date();
+  const nuevaHora = ahora.getHours();
+
+  if (nuevaHora !== horaActual) {
+    guardarResumenHora();        // 💾 guarda archivo con resumen anterior
+    acumuladorHora = {};         // 🔄 resetea acumulador
+    horaActual = nuevaHora;      // 🕒 actualiza hora
+  }
+
+  acumularContadoresLocales();   // sigue sumando lo nuevo
+}
+
+// Ejecutar cada minuto
+//setInterval(verificarCambioHora, 60 * 1000);
 
 function aplicarConfiguracionLocal(config) {
   umbralCentroAncho = config.ancho ?? 2.0;
@@ -500,6 +596,8 @@ window.onload = () => {
   }
 
   actualizarVisibilidad();
+  crearWebSocket();
+
 };
 
 
@@ -620,7 +718,14 @@ function procesarMensajes() {
         if (vtotal > umbralVelAlta) {
           estadoPersona[id] = "movimiento";
           caidasPorId[id] = null;
-        } else if (vtotal < umbralVelBaja && desplazamiento < umbralDisp && z > zCaida) {
+      } else if (
+        vtotal < umbralVelBaja &&
+        desplazamiento < umbralDisp &&
+        z > zCaida &&
+        Math.sqrt(px * px + py * py) <= 3.0 // ✅ dentro de 3 metros desde el centro
+        ) {
+
+
           if (estadoPersona[id] === "movimiento") {
             if (!caidasPorId[id]) {
               caidasPorId[id] = Date.now();
@@ -859,20 +964,9 @@ if (conteoGuardado) conteo = JSON.parse(conteoGuardado);
 draw();
 
 
-socket.onclose = () => {
-  console.warn("⚠️ WebSocket cerrado");
-  estadoWS.textContent = "🔴 WebSocket desconectado";
-  estadoWS.style.color = "red";
-};
 
-socket.onerror = (e) => {
-  console.error("❌ Error WebSocket", e);
-  estadoWS.textContent = "🔴 WebSocket con error";
-  estadoWS.style.color = "orange";
-};
+function manejarMensaje(event) {
 
-
-socket.onmessage = event => {
   const now = Date.now();
   let data = null;
 
@@ -930,7 +1024,7 @@ aplicarConfiguracionLocal(u);
 
       // ✅ RESPONDER A PING SI LLEGA
  if (data.tipo === "ping") {
-  socket.send("{}"); // estructura vacía
+  socket.send(JSON.stringify({ tipo: "pong" }));
   console.log("📤 Keep-alive vacío enviado");
   return;
 } 
@@ -990,8 +1084,8 @@ aplicarConfiguracionLocal(u);
     frecVentana.push(now); if (frecVentana.length > 50) frecVentana.shift();
   }
   lastTimestamp = now;
-};
 
+}
 
 
 
