@@ -194,7 +194,7 @@ wss.on("connection", (ws) => {
       for (const p of json) {
         logCache.push({ ...p, timestamp });
       }
-      broadcastAll(JSON.stringify(json));
+      broadcastExcept(ws, JSON.stringify(json));
       return;
     }
 
