@@ -213,6 +213,13 @@ wss.on("connection", (ws) => {
       broadcastAll(JSON.stringify(json));
       return;
     }
+    // 💡 Reset de contadores solicitado
+    if (json.tipo === "reset_contadores") {
+    console.log("🔁 Reset de contadores solicitado desde la web");
+    broadcastExcept(ws, JSON.stringify(json)); // reenviar al ESP32
+    return;
+}
+
 
   } catch (e) {
     console.warn(`❌ Mensaje inválido desde ${ip}:`, texto);
