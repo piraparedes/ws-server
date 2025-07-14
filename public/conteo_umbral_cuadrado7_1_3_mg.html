@@ -752,7 +752,7 @@ function procesarMensajes() {
         if (!trails[p.id]) trails[p.id] = [];
         const { x, y } = transformar(px, py);
         trails[p.id].push({ x, y });
-        if (trails[p.id].length > 20) trails[p.id].shift();
+        if (trails[p.id].length > 10) trails[p.id].shift();
 
         puntosCalor.push({ x, y, t: ahora });
       });
@@ -760,6 +760,9 @@ function procesarMensajes() {
       
 
       puntosCalor = puntosCalor.filter(p => Date.now() - p.t < 3600000);
+if (puntosCalor.length > 2000) {
+  puntosCalor.splice(0, puntosCalor.length - 2000);
+}
 
      
 
@@ -769,19 +772,28 @@ function procesarMensajes() {
   }
 
   // Eliminar personas expiradas
-  for (let id in ultimoUpdatePorId) {
-    if (ahora - ultimoUpdatePorId[id] > EXPIRACION_MS) {
-      delete trails[id];
-      delete ultimaPersonaPorId[id];
-      delete historialZona[id];
-      delete zonaAnterior[id];
-      delete ultimoUpdatePorId[id];
-    }
+ for (let id in ultimoUpdatePorId) {
+  if (ahora - ultimoUpdatePorId[id] > EXPIRACION_MS) {
+    delete trails[id];
+    delete ultimaPersonaPorId[id];
+    delete historialZona[id];
+    delete historialZonaCentro[id];
+    delete historialZonaA[id];
+    delete historialZonaB[id];
+    delete zonaAnterior[id];
+    delete ultimoUpdatePorId[id];
+    delete estadoPersona[id];
+    delete caidasPorId[id];
   }
+}
+if (bufferMensajes.length > 100) bufferMensajes = bufferMensajes.slice(-100);
+
 }
 let ultimaActualizacionMapa = 0;
 const INTERVALO_MAPA_MS = 500;  // cada 0.5 segundos
 function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
   procesarMensajes();
 
   const modoVisual = document.getElementById("modoVisual")?.value || "todo";
