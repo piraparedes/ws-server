@@ -237,7 +237,7 @@ function determinarZonaB(x, y) {
 
 function transformar(x, y) {
   return {
-    x: canvas.width / 2 - x * escalaX,  // EJE X INVERTIDO
+    x: canvas.width / 2 + x * escalaX,  // EJE X normal
     y: canvas.height / 2 - y * escalaY  // EJE Y NORMAL
   };
 }
@@ -800,8 +800,8 @@ function draw() {
   ctx.fillStyle = "rgba(0,0,0,0.2)";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-const ui = transformar(-cx - umbralCentroAncho / 2, cy - umbralCentroAlto / 2);
-const uf = transformar(-cx + umbralCentroAncho / 2, cy + umbralCentroAlto / 2);
+const ui = transformar(cx - umbralCentroAncho / 2, cy - umbralCentroAlto / 2);
+const uf = transformar(cx + umbralCentroAncho / 2, cy + umbralCentroAlto / 2);
 
 
   ctx.strokeStyle = "yellow";
@@ -810,15 +810,15 @@ const uf = transformar(-cx + umbralCentroAncho / 2, cy + umbralCentroAlto / 2);
   ctx.setLineDash([]);
 
   // Zona A (azul)
-const a1 = transformar(-zonaA.cx - zonaA.ancho/2, zonaA.cy - zonaA.alto/2);
-const a2 = transformar(-zonaA.cx + zonaA.ancho/2, zonaA.cy + zonaA.alto/2);
+const a1 = transformar(zonaA.cx - zonaA.ancho/2, zonaA.cy - zonaA.alto/2);
+const a2 = transformar(zonaA.cx + zonaA.ancho/2, zonaA.cy + zonaA.alto/2);
 ctx.strokeStyle = "cyan";
 ctx.setLineDash([5, 3]);
 ctx.strokeRect(a1.x, a2.y, a2.x - a1.x, a1.y - a2.y);
 
 // Zona B (rojo)
-const b1 = transformar(-zonaB.cx - zonaB.ancho/2, zonaB.cy - zonaB.alto/2);
-const b2 = transformar(-zonaB.cx + zonaB.ancho/2, zonaB.cy + zonaB.alto/2);
+const b1 = transformar(zonaB.cx - zonaB.ancho/2, zonaB.cy - zonaB.alto/2);
+const b2 = transformar(zonaB.cx + zonaB.ancho/2, zonaB.cy + zonaB.alto/2);
 ctx.strokeStyle = "magenta";
 ctx.setLineDash([5, 3]);
 ctx.strokeRect(b1.x, b2.y, b2.x - b1.x, b1.y - b2.y);
@@ -873,11 +873,14 @@ drawArrow(last.x, last.y, last.x + dx, last.y + dy);
 
       const zona = zonaAnterior[id]?.entrada ?? zonaAnterior[id] ?? '';
       const historial = historialZona[id] ? historialZona[id].join('→') : '';
+      const histC = historialZonaCentro[id]?.join('→') ?? '';
+const histA = historialZonaA[id]?.join('→') ?? '';
+const histB = historialZonaB[id]?.join('→') ?? '';
+
       ctx.fillStyle = "#ff0";
       ctx.font = "12px monospace";
       ctx.fillText("Z: " + persona.z.toFixed(2) + " m", last.x + 10, last.y + 20);
 
-      ctx.fillText("H: " + historial, last.x + 10, last.y + 35);
     }
   }
 
